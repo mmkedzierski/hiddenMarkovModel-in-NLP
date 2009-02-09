@@ -1,0 +1,210 @@
+#!/bin/bash
+
+function training() {
+	korpus=$*
+	
+	echo '*** Obliczam rozmiar slownika'
+	echo
+	dict_size=`./extract_dict $korpus | wc -l`
+	echo "Liczba slow w korpusie treningowym: $dict_size"
+	echo
+	
+	echo '*** Obliczam rozmiar tagsetu'
+	echo
+	tagset_size=`./extract_tagset $korpus | wc -l`
+	echo "Liczba tagow w korpusie treningowym: $tagset_size"
+	echo
+	
+	echo '*** Tworze model n-gramowy'
+	./extract_ngrams ngram-model.dat $korpus
+	echo
+	
+	echo '*** Wygladzam model'
+	./gt_smoothen $dict_size $tagset_size ngram-model.dat smoothed-model.dat
+	echo
+	
+	echo '*** Obliczam parametry interpolacji liniowej'
+	./find_gammas smoothed-model.dat gammas.dat $korpus
+	echo
+	
+	echo '*** Tworze model prawdopodobienstwa'
+	./generate_probs $dict_size $tagset_size gammas.dat smoothed-model.dat probs.dat
+}
+
+
+function do_tag() {	
+	korpus=$*
+	
+	echo '*** Usuwam tagi'
+	./untag $korpus
+	for f in $korpus; do mv $f $f.gold; mv $f.untagged $f; done
+	echo
+	
+	echo '*** Tager oparty na Hidden Markov Models (HMM)'
+	./hmm_tag probs.dat $korpus
+	for f in $korpus; do mv $f.tagged $f.tagged_hmm; done
+	echo
+	
+	echo '*** Tager unigramowy (kontrolny)'
+	./unigram_tag probs.dat $korpus
+	for f in $korpus; do mv $f.tagged $f.tagged_unigram; done
+	echo
+}
+
+
+
+
+###################### TESTOWANIE #############################
+if [ $# -eq 1 ]; then
+	echo
+	echo '*****************************************************'
+	echo '********* Przygotowanie - kompilacja **************'
+	echo '*****************************************************'
+	echo
+	make
+	
+	echo
+	echo '*****************************************************'
+	echo '* Testuje tagger przez 10-krotna walidacje krzyzowa *'
+	echo '*****************************************************'
+	echo
+	
+	korpus=`find $1 -name morph.xml`
+	if [ -z "$korpus" ]; then
+		echo "ERROR! Podany korpus jest pusty (brak w nim plikow morph.xml)"
+		echo
+		exit 1
+	fi
+	
+	echo '*** Dziele korpus na czesci'
+	rm -rf bins
+	mkdir bins
+	./divide 10 $korpus
+	echo
+	
+	for f in `ls bins`; do
+		if [ -z "`grep '<orth>' bins/$f`" ]; then
+			echo "ERROR! Za maly korpus (nie mozna podzielic na 10 czesci)"
+			echo
+			exit 1
+		fi
+	done
+	
+	declare -i i
+	i=0
+	hmm_score=0.0
+	unigram_score=0.0
+	for test_bin in `ls bins`; do
+		train_list=
+		for b in `ls bins`; do
+			if [ $b != $test_bin ]; then 
+				train_list="$train_list bins/$b"
+			fi
+		done
+		
+		i=$(( $i + 1 ))
+		echo
+		echo '*** Tura' "$i"
+		echo
+		echo -n "Trenuje model..."
+ 		training $train_list > /dev/null
+ 		echo
+ 		echo -n "Testuje model..."
+ 		echo
+ 		do_tag $train_list > /dev/null
+ 		echo
+ 		echo "Oceny w tym tescie:"
+ 		
+		echo -n 'Tager HMM: '
+		tmp=`(for f in $train_list; do ./score $f.gold $f.tagged_hmm; done) | ./interpret_scores`
+		echo $tmp
+		hmm_score=`echo "print $hmm_score + $tmp" | python`
+		
+		echo -n 'Tager unigramowy: '
+		tmp=`(for f in $train_list; do ./score $f.gold $f.tagged_unigram; done) | ./interpret_scores`
+		echo $tmp
+		unigram_score=`echo "print $unigram_score + $tmp" | python`
+		
+ 		echo 
+		echo 'Sprzatanie...'
+		for f in $train_list; do mv $f.gold $f; done
+		for f in $train_list; do rm $f.tagged_*; done
+		make clean_data > /dev/null
+		echo
+	done
+	
+	echo
+	echo '*****************************************************'
+	echo '************** Podsumowanie wynikow *****************'
+	echo '*****************************************************'
+	echo
+	
+	echo 'Tager HMM:' `echo "print $hmm_score / 10.0" | python`
+	echo 'Tager unigramowy:' `echo "print $unigram_score / 10.0" | python`
+	echo
+	
+	
+	
+###################### TAGOWANIE #############################
+elif [ $# -eq 2 ]; then
+	echo
+	echo '*****************************************************'
+	echo '********* Przygotowanie - kompilacja **************'
+	echo '*****************************************************'
+	echo
+	make
+	
+	echo
+	echo '*****************************************************'
+	echo '********* Trenuje na korpusie' "'$1'" ' **************'
+	echo '*****************************************************'
+	echo
+	
+	korpus=`find $1 -name morph.xml`
+	if [ -z "$korpus" ]; then
+		echo "ERROR! Podany korpus1 jest pusty (brak w nim plikow morph.xml)"
+		echo
+		exit 1
+	fi
+	
+	training $korpus
+	
+	echo
+	echo '*****************************************************'
+	echo '********* Taguje korpus' "'$2'" ' **************'
+	echo '*****************************************************'
+	echo
+	
+	korpus=`find $2 -name morph.xml`
+	if [ -z "$korpus" ]; then
+		echo "ERROR! Podany korpus2 jest pusty (brak w nim plikow morph.xml)"
+		echo
+		exit 1
+	fi
+	
+	do_tag $korpus
+	
+	echo '*** Ocena wynikow tagowania'
+	echo
+	echo -n 'Tager HMM: '
+	(for f in $korpus; do ./score $f.gold $f.tagged_hmm; done) | ./interpret_scores
+	
+	echo -n 'Tager unigramowy: '
+	(for f in $korpus; do ./score $f.gold $f.tagged_unigram; done) | ./interpret_scores
+	echo
+	
+	echo 'Sprzatanie...'
+	for f in $korpus; do mv $f.gold $f; done
+ 	make clean_data > /dev/null
+	
+	echo "Zrobione!"
+	echo
+	
+###################### HELP #############################
+else
+	echo "Uzycie: tagger <korpus1> [<korpus2>]"
+	echo "gdzie: <korpusn> - katalog z korpusem w formacie IPI PAN"
+	echo "a) jezeli podany tylko <korpus1>, to jest na nim przeprowadzany test taggera"
+	echo "b) jezeli podane zarowno <korpus1> jak i <korpus2>, tagger trenuje na korpusie 1, zas taguje korpus 2"
+	echo
+fi

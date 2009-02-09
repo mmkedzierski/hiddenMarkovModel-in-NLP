@@ -1,0 +1,11 @@
+#!/bin/bash
+
+date="`date +'%F' | tr '-' '.'`-`date +'%T' | tr ':' '.'`"
+dir="`pwd`/../backups/backup-$date"
+mkdir $dir
+cp * $dir/
+cd $dir
+make clean
+rm *.txt
+echo $1 > opis.txt
+cp -r $dir /media/KINGSTON/studia/ils/zaliczenie/backups

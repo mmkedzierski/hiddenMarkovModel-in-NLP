@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# skrypt wypisuje wszystkie slowa (orth) z podanego korpusu
+if [ $# -lt 1 ]; then
+	echo "Uzycie: extract_dict <lista_plikow_korpusu>"
+	exit 1
+fi
+
+(
+	for f; do
+		grep "<orth>" $f | cut -f2 -d '>' | cut -f1 -d '<' 
+	done
+) | sort | uniq

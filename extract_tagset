@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ $# -lt 1 ]; then
+	echo "Uzycie: extract_tagset <lista_plikow_korpusu>"
+	exit 1
+fi
+
+(
+	for f; do
+		grep "<ctag>" $f | cut -f5 -d '<' | cut -f2 -d '>' 
+	done
+) | sort | uniq
